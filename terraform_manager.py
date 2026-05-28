@@ -7,20 +7,20 @@ from generate_tf import get_session_dir
 async def run_terraform(session_id: str) -> tuple[bool, dict]:
     workdir = get_session_dir(session_id)
 
-    init_ok, init_out = await _run_cmd("terraform", "init", "-input=false", cwd=workdir)
+    init_ok, init_out, init_err = await _run_cmd("terraform", "init", "-input=false", cwd=workdir)
     if not init_ok:
-        return False, {"error": init_out, "step": "init"}
+        return False, {"error": init_out + init_err, "step": "init"}
 
-    apply_ok, apply_out = await _run_cmd(
+    apply_ok, apply_out, apply_err = await _run_cmd(
         "terraform", "apply", "-auto-approve", "-input=false",
         cwd=workdir, timeout=600
     )
     if not apply_ok:
-        return False, {"error": apply_out, "step": "apply"}
+        return False, {"error": apply_out + apply_err, "step": "apply"}
 
-    ok, out_json = await _run_cmd("terraform", "output", "-json", cwd=workdir)
+    ok, out_json, output_err = await _run_cmd("terraform", "output", "-json", cwd=workdir)
     if not ok:
-        return False, {"error": out_json, "step": "output"}
+        return False, {"error": out_json + output_err, "step": "output"}
 
     try:
         outputs = json.loads(out_json)
@@ -42,7 +42,7 @@ async def run_terraform(session_id: str) -> tuple[bool, dict]:
 
 DEFAULT_REGION = "sa-santiago-1"
 
-async def _run_cmd(*args, cwd: Path, timeout: int = 300) -> tuple[bool, str]:
+async def _run_cmd(*args, cwd: Path, timeout: int = 300) -> tuple[bool, str, str]:
     try:
         env = os.environ.copy()
         env["OCI_REGION"] = DEFAULT_REGION
@@ -54,13 +54,13 @@ async def _run_cmd(*args, cwd: Path, timeout: int = 300) -> tuple[bool, str]:
             env=env,
         )
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-        output = (stdout.decode("utf-8", errors="replace") +
-                  stderr.decode("utf-8", errors="replace"))
-        return proc.returncode == 0, output
+        out = stdout.decode("utf-8", errors="replace")
+        err = stderr.decode("utf-8", errors="replace")
+        return proc.returncode == 0, out, err
     except asyncio.TimeoutError:
-        return False, f"Timeout after {timeout}s"
+        return False, "", f"Timeout after {timeout}s"
     except Exception as e:
-        return False, str(e)
+        return False, "", str(e)
 
 def is_capacity_error(output: str) -> bool:
     lower = output.lower()

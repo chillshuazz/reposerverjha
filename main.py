@@ -228,8 +228,10 @@ def _extract_error(text: str) -> str:
             if line.strip() == "" or "╵" in line:
                 break
             error_lines.insert(0, line)
-    result = "\n".join(error_lines) if error_lines else text
-    return result[:1500]
+    if error_lines:
+        return "\n".join(error_lines)[:1500]
+    last_lines = "\n".join(lines[-40:])
+    return last_lines[:1500]
 
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
