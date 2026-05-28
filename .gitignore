@@ -1,0 +1,6 @@
+.env
+credentials.json
+user_api_key.pem
+terraform_sessions/
+__pycache__/
+*.pyc

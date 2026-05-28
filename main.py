@@ -1,0 +1,171 @@
+import os
+import json
+import asyncio
+import logging
+from pathlib import Path
+
+from dotenv import load_dotenv
+from telegram import Update
+from telegram.ext import Application, CommandHandler, ContextTypes
+
+from generate_tf import create_session, write_tfvars, cleanup_session
+from terraform_manager import run_terraform, is_capacity_error
+
+logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
+load_dotenv()
+
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+ALLOWED_USER_ID = int(os.getenv("ALLOWED_USER_ID", "0"))
+
+CREDENTIALS_FILE = Path(__file__).parent / "credentials.json"
+
+def load_creds():
+    if CREDENTIALS_FILE.exists():
+        return json.loads(CREDENTIALS_FILE.read_text(encoding="utf-8"))
+    return {}
+
+def restricted(func):
+    async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs):
+        if update.effective_user.id != ALLOWED_USER_ID:
+            await update.message.reply_text("No autorizado.")
+            return
+        return await func(update, context, *args, **kwargs)
+    return wrapper
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ALLOWED_USER_ID:
+        await update.message.reply_text("No autorizado.")
+        return
+    await update.message.reply_text(
+        "🤖 *Bot OCI Free Tier*\n\n"
+        "Usá /create para crear una VM Ampere A1.\n"
+        "Usá /cancel para detener un despliegue en curso.",
+        parse_mode="Markdown"
+    )
+
+@restricted
+async def cmd_create(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    creds = load_creds()
+    if not creds:
+        await update.message.reply_text("No hay credenciales guardadas. Revisá el archivo credentials.json")
+        return
+
+    if "task" in context.user_data and not context.user_data["task"].done():
+        await update.message.reply_text("Ya hay un despliegue en curso. Usá /cancel para detenerlo.")
+        return
+
+    await update.message.reply_text("⏳ Iniciando despliegue de VM Ampere A1...")
+
+    session_id = create_session()
+    context.user_data["session_id"] = session_id
+
+    write_tfvars(
+        session_id,
+        creds["tenancy_ocid"],
+        creds["user_ocid"],
+        creds["fingerprint"],
+        creds["pem_path"],
+        "ubuntu2404",
+    )
+
+    task = context.application.create_task(
+        _deploy_loop(update.effective_chat.id, session_id, context, update.message.message_id)
+    )
+    context.user_data["task"] = task
+
+@restricted
+async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    task = context.user_data.get("task")
+    if task and not task.done():
+        task.cancel()
+        await update.message.reply_text("Despliegue cancelado.")
+    else:
+        await update.message.reply_text("No hay ningún despliegue en curso.")
+
+    session_id = context.user_data.get("session_id")
+    if session_id:
+        cleanup_session(session_id)
+        context.user_data.pop("session_id", None)
+
+async def _deploy_loop(chat_id: int, session_id: str, context: ContextTypes.DEFAULT_TYPE, msg_id: int = None):
+    attempt = 0
+    status_msg = None
+    try:
+        while True:
+            attempt += 1
+            success, result = await run_terraform(session_id)
+
+            if success:
+                ips_public = ", ".join(result["public_ips"]) if result["public_ips"] else "N/A"
+                ips_private = ", ".join(result["private_ips"]) if result["private_ips"] else "N/A"
+
+                msg = (
+                    "✅ *VM creada exitosamente!*\n\n"
+                    f"• *IP Pública:* `{ips_public}`\n"
+                    f"• *IP Privada:* `{ips_private}`\n"
+                    f"• *SO:* Ubuntu 24.04\n\n"
+                    f"*Comando SSH:*\n"
+                    f"```\nssh -i oci-id_rsa ubuntu@{ips_public}\n```"
+                )
+                await context.bot.send_message(chat_id=chat_id, text=msg, parse_mode="Markdown")
+
+                ssh_key = result.get("ssh_private_key", "")
+                if ssh_key:
+                    import tempfile, os as os_mod
+                    tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".pem", delete=False)
+                    tmp.write(ssh_key)
+                    tmp.close()
+                    with open(tmp.name, "rb") as f:
+                        await context.bot.send_document(
+                            chat_id=chat_id,
+                            document=f,
+                            filename="oci-id_rsa.pem",
+                            caption="🔑 Clave SSH privada"
+                        )
+                    os_mod.unlink(tmp.name)
+
+                await context.bot.send_message(
+                    chat_id=chat_id,
+                    text="La VM está lista. Podés gestionarla desde el panel de Oracle.",
+                )
+                cleanup_session(session_id)
+                return
+
+            error_text = result.get("error", "")
+
+            if is_capacity_error(error_text):
+                text = f"⚠️ Sin capacidad disponible (intento #{attempt}).\nEsperando 60 segundos para reintentar..."
+                if status_msg:
+                    try:
+                        await status_msg.edit_text(text)
+                    except:
+                        status_msg = await context.bot.send_message(chat_id=chat_id, text=text)
+                else:
+                    status_msg = await context.bot.send_message(chat_id=chat_id, text=text)
+                await asyncio.sleep(60)
+            else:
+                safe_error = error_text[:1500].encode("ascii", errors="replace").decode("ascii")
+                await context.bot.send_message(
+                    chat_id=chat_id,
+                    text=f"❌ Error al crear la VM (intento #{attempt}):\n`{safe_error}`",
+                    parse_mode="Markdown"
+                )
+                return
+    except asyncio.CancelledError:
+        await context.bot.send_message(chat_id=chat_id, text="Despliegue cancelado por el usuario.")
+    finally:
+        context.user_data.pop("task", None)
+        context.user_data.pop("session_id", None)
+
+def main():
+    app = Application.builder().token(BOT_TOKEN).build()
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("create", cmd_create))
+    app.add_handler(CommandHandler("cancel", cmd_cancel))
+
+    print("Bot iniciado. Presioná Ctrl+C para detener.")
+    app.run_polling(allowed_updates=Update.ALL_TYPES)
+
+if __name__ == "__main__":
+    main()
