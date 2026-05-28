@@ -9,8 +9,12 @@ variable "user_ocid" {
 variable "fingerprint" {
   description = "OCI Fingerprint ID for Free-Tier Account"
 }
-variable "private_key" {
-  description = "Private key content for OCI API authentication"
+variable "private_key_path" {
+  description = "Path to the OCI API private key file"
+}
+variable "region" {
+  description = "OCI region"
+  default = "sa-santiago-1"
 }
 
 # Network Configuration Variables

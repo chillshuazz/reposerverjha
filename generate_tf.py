@@ -13,14 +13,12 @@ def create_session() -> str:
     return session_id
 
 def write_tfvars(session_id: str, tenancy_ocid: str, user_ocid: str,
-                  fingerprint: str, pem_content: str, os_image: str):
+                  fingerprint: str, private_key_path: str, os_image: str):
     session_dir = SESSIONS_DIR / session_id
     content = f'''tenancy_ocid     = "{tenancy_ocid}"
 user_ocid        = "{user_ocid}"
 fingerprint      = "{fingerprint}"
-private_key = <<EOF
-{pem_content}
-EOF
+private_key_path = "{private_key_path}"
 oci_os_image     = "{os_image}"
 instance_prefix  = "oci-bot"
 oci_vm_count     = 1

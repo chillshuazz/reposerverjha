@@ -23,7 +23,9 @@ if not BOT_TOKEN:
 
 ALLOWED_USER_ID = int(os.getenv("ALLOWED_USER_ID", "0"))
 
-CREDENTIALS_FILE = Path(__file__).parent / "credentials.json"
+BASE_DIR = Path(__file__).parent
+CREDENTIALS_FILE = BASE_DIR / "credentials.json"
+PEM_FILE_PATH = str(BASE_DIR / "user_api_key.pem")
 
 def setup_creds_from_env():
     tenancy = os.getenv("TENANCY_OCID")
@@ -34,19 +36,21 @@ def setup_creds_from_env():
     if tenancy and user and fingerprint and pem_b64:
         logging.info("Loading credentials from environment variables")
         try:
-            base64.b64decode(pem_b64)
+            pem_data = base64.b64decode(pem_b64)
+            Path(PEM_FILE_PATH).write_bytes(pem_data)
+            logging.info("PEM file written (%d bytes) to %s", len(pem_data), PEM_FILE_PATH)
         except Exception as e:
-            logging.error("PEM_B64 is not valid base64: %s", e)
+            logging.error("Failed to write PEM: %s", e)
             return False
 
         creds = {
             "tenancy_ocid": tenancy,
             "user_ocid": user,
             "fingerprint": fingerprint,
-            "pem_b64": pem_b64,
+            "pem_path": PEM_FILE_PATH,
         }
         CREDENTIALS_FILE.write_text(json.dumps(creds, indent=2), encoding="utf-8")
-        logging.info("credentials.json created")
+        logging.info("credentials.json created with pem_path=%s", PEM_FILE_PATH)
         return True
     logging.warning("Missing env vars")
     return False
@@ -55,7 +59,14 @@ def load_creds():
     if not CREDENTIALS_FILE.exists():
         if not setup_creds_from_env():
             return {}
-    return json.loads(CREDENTIALS_FILE.read_text(encoding="utf-8"))
+    creds = json.loads(CREDENTIALS_FILE.read_text(encoding="utf-8"))
+    pem_path = creds.get("pem_path", "")
+    if not Path(pem_path).exists():
+        logging.warning("PEM file missing at %s, recreating", pem_path)
+        if not setup_creds_from_env():
+            return {}
+        creds = json.loads(CREDENTIALS_FILE.read_text(encoding="utf-8"))
+    return creds
 
 def restricted(func):
     async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs):
@@ -92,14 +103,12 @@ async def cmd_create(update: Update, context: ContextTypes.DEFAULT_TYPE):
     session_id = create_session()
     context.user_data["session_id"] = session_id
 
-    pem_content = base64.b64decode(creds["pem_b64"]).decode("ascii")
-
     write_tfvars(
         session_id,
         creds["tenancy_ocid"],
         creds["user_ocid"],
         creds["fingerprint"],
-        pem_content,
+        creds["pem_path"],
         "ubuntu2404",
     )
 
