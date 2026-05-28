@@ -162,6 +162,7 @@ async def _deploy_loop(chat_id: int, session_id: str, context: ContextTypes.DEFA
                 return
 
             error_text = result.get("error", "")
+            error_text = _extract_error(error_text)
 
             if is_capacity_error(error_text):
                 text = f"⚠️ Sin capacidad disponible (intento #{attempt}).\nEsperando 60 segundos para reintentar..."
@@ -186,6 +187,21 @@ async def _deploy_loop(chat_id: int, session_id: str, context: ContextTypes.DEFA
     finally:
         context.user_data.pop("task", None)
         context.user_data.pop("session_id", None)
+
+def _extract_error(text: str) -> str:
+    lines = text.split("\n")
+    error_lines = []
+    capture = False
+    for line in reversed(lines):
+        if "Error:" in line or "╷" in line:
+            error_lines.insert(0, line)
+            capture = True
+        elif capture:
+            if line.strip() == "" or "╵" in line:
+                break
+            error_lines.insert(0, line)
+    result = "\n".join(error_lines) if error_lines else text
+    return result[:1500]
 
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
