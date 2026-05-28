@@ -44,6 +44,10 @@ def setup_creds_from_env():
         logging.info("Loading credentials from environment variables")
         try:
             TMP_DIR.mkdir(parents=True, exist_ok=True)
+            # Python 3.14 requires padding; add it if missing
+            missing = len(pem_b64) % 4
+            if missing:
+                pem_b64 += '=' * (4 - missing)
             pem_data = base64.b64decode(pem_b64)
             Path(PEM_FILE_PATH).write_bytes(pem_data)
             pem_lines = pem_data.decode("ascii").strip().split("\n")
