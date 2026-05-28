@@ -1,5 +1,6 @@
 import os
 import json
+import base64
 import asyncio
 import logging
 from pathlib import Path
@@ -16,18 +17,42 @@ load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 if not BOT_TOKEN:
-    logging.error("BOT_TOKEN environment variable is not set!")
-    logging.error("Available env vars: %s", [k for k in os.environ.keys() if "BOT" in k or "TOKEN" in k or "ALLOWED" in k])
-    raise SystemExit("ERROR: BOT_TOKEN is required. Set it in Railway Variables tab.")
+    logging.error("BOT_TOKEN is not set!")
+    logging.error("Found: %s", [k for k in os.environ.keys() if "BOT" in k or "TOKEN" in k or "ALLOWED" in k])
+    raise SystemExit("ERROR: BOT_TOKEN is required.")
 
 ALLOWED_USER_ID = int(os.getenv("ALLOWED_USER_ID", "0"))
 
-CREDENTIALS_FILE = Path(__file__).parent / "credentials.json"
+BASE_DIR = Path(__file__).parent
+CREDENTIALS_FILE = BASE_DIR / "credentials.json"
+PEM_FILE = BASE_DIR / "user_api_key.pem"
+
+def setup_creds_from_env():
+    tenancy = os.getenv("TENANCY_OCID")
+    user = os.getenv("USER_OCID")
+    fingerprint = os.getenv("FINGERPRINT")
+    pem_b64 = os.getenv("PEM_B64")
+
+    if tenancy and user and fingerprint and pem_b64:
+        logging.info("Loading credentials from environment variables")
+        creds = {
+            "tenancy_ocid": tenancy,
+            "user_ocid": user,
+            "fingerprint": fingerprint,
+            "pem_path": str(PEM_FILE),
+        }
+        CREDENTIALS_FILE.write_text(json.dumps(creds, indent=2), encoding="utf-8")
+        pem_data = base64.b64decode(pem_b64)
+        PEM_FILE.write_bytes(pem_data)
+        logging.info("credentials.json and user_api_key.pem created from env vars")
+        return True
+    return False
 
 def load_creds():
-    if CREDENTIALS_FILE.exists():
-        return json.loads(CREDENTIALS_FILE.read_text(encoding="utf-8"))
-    return {}
+    if not CREDENTIALS_FILE.exists():
+        if not setup_creds_from_env():
+            return {}
+    return json.loads(CREDENTIALS_FILE.read_text(encoding="utf-8"))
 
 def restricted(func):
     async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs):
