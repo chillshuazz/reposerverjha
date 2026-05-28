@@ -11,10 +11,15 @@ from telegram.ext import Application, CommandHandler, ContextTypes
 from generate_tf import create_session, write_tfvars, cleanup_session
 from terraform_manager import run_terraform, is_capacity_error
 
-logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
+logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.DEBUG)
 load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
+if not BOT_TOKEN:
+    logging.error("BOT_TOKEN environment variable is not set!")
+    logging.error("Available env vars: %s", [k for k in os.environ.keys() if "BOT" in k or "TOKEN" in k or "ALLOWED" in k])
+    raise SystemExit("ERROR: BOT_TOKEN is required. Set it in Railway Variables tab.")
+
 ALLOWED_USER_ID = int(os.getenv("ALLOWED_USER_ID", "0"))
 
 CREDENTIALS_FILE = Path(__file__).parent / "credentials.json"
