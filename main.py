@@ -35,6 +35,14 @@ def setup_creds_from_env():
 
     if tenancy and user and fingerprint and pem_b64:
         logging.info("Loading credentials from environment variables")
+        try:
+            pem_data = base64.b64decode(pem_b64)
+            PEM_FILE.write_bytes(pem_data)
+            logging.info("PEM file written (%d bytes) at %s", len(pem_data), PEM_FILE)
+        except Exception as e:
+            logging.error("Failed to decode/write PEM: %s", e)
+            return False
+
         creds = {
             "tenancy_ocid": tenancy,
             "user_ocid": user,
@@ -42,17 +50,27 @@ def setup_creds_from_env():
             "pem_path": str(PEM_FILE),
         }
         CREDENTIALS_FILE.write_text(json.dumps(creds, indent=2), encoding="utf-8")
-        pem_data = base64.b64decode(pem_b64)
-        PEM_FILE.write_bytes(pem_data)
-        logging.info("credentials.json and user_api_key.pem created from env vars")
+        logging.info("credentials.json created with pem_path=%s", creds["pem_path"])
         return True
+    logging.warning("Missing env vars: TENANCY_OCID=%s USER_OCID=%s FINGERPRINT=%s PEM_B64=%s",
+                    bool(tenancy), bool(user), bool(fingerprint), bool(pem_b64))
     return False
 
 def load_creds():
     if not CREDENTIALS_FILE.exists():
         if not setup_creds_from_env():
             return {}
-    return json.loads(CREDENTIALS_FILE.read_text(encoding="utf-8"))
+
+    creds = json.loads(CREDENTIALS_FILE.read_text(encoding="utf-8"))
+
+    pem = creds.get("pem_path", "")
+    if pem and not Path(pem).exists():
+        logging.warning("PEM file not found at %s, recreating from env", pem)
+        if not setup_creds_from_env():
+            return {}
+        creds = json.loads(CREDENTIALS_FILE.read_text(encoding="utf-8"))
+
+    return creds
 
 def restricted(func):
     async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs):
