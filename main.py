@@ -24,21 +24,31 @@ if not BOT_TOKEN:
 ALLOWED_USER_ID = int(os.getenv("ALLOWED_USER_ID", "0"))
 
 BASE_DIR = Path(__file__).parent
-CREDENTIALS_FILE = BASE_DIR / "credentials.json"
-PEM_FILE_PATH = str(BASE_DIR / "user_api_key.pem")
+TMP_DIR = Path("/tmp") if os.name == "posix" else Path(os.environ.get("TEMP", BASE_DIR))
+CREDENTIALS_FILE = TMP_DIR / "oci_creds.json"
+PEM_FILE_PATH = str(TMP_DIR / "user_api_key.pem")
 
 def setup_creds_from_env():
-    tenancy = os.getenv("TENANCY_OCID")
-    user = os.getenv("USER_OCID")
-    fingerprint = os.getenv("FINGERPRINT")
-    pem_b64 = os.getenv("PEM_B64")
+    tenancy = os.getenv("TENANCY_OCID", "")
+    user = os.getenv("USER_OCID", "")
+    fingerprint = os.getenv("FINGERPRINT", "")
+    pem_b64 = os.getenv("PEM_B64", "")
+
+    logging.info("setup_creds: TENANCY_OCID=%s, USER_OCID=%s, FINGERPRINT=%s, PEM_B64 len=%d",
+                 "SET" if tenancy else "MISSING",
+                 "SET" if user else "MISSING",
+                 "SET" if fingerprint else "MISSING",
+                 len(pem_b64))
 
     if tenancy and user and fingerprint and pem_b64:
         logging.info("Loading credentials from environment variables")
         try:
+            TMP_DIR.mkdir(parents=True, exist_ok=True)
             pem_data = base64.b64decode(pem_b64)
             Path(PEM_FILE_PATH).write_bytes(pem_data)
-            logging.info("PEM file written (%d bytes) to %s", len(pem_data), PEM_FILE_PATH)
+            pem_lines = pem_data.decode("ascii").strip().split("\n")
+            logging.info("PEM written: %d bytes, %d lines, starts_with=%s",
+                         len(pem_data), len(pem_lines), pem_lines[0] if pem_lines else "EMPTY")
         except Exception as e:
             logging.error("Failed to write PEM: %s", e)
             return False
@@ -50,9 +60,9 @@ def setup_creds_from_env():
             "pem_path": PEM_FILE_PATH,
         }
         CREDENTIALS_FILE.write_text(json.dumps(creds, indent=2), encoding="utf-8")
-        logging.info("credentials.json created with pem_path=%s", PEM_FILE_PATH)
+        logging.info("credentials.json created")
         return True
-    logging.warning("Missing env vars")
+    logging.warning("Missing one or more env vars")
     return False
 
 def load_creds():
